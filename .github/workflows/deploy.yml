@@ -1,55 +1,72 @@
 name: CI/CD with Terraform
-on:
-    push:
-        branches:
-            - Complete-CICD-Terraform-aws
 
+on:
+  push:
+    branches:
+      - Complete-CICD-Terraform-aws
+  workflow_dispatch: {}   # allow manual trigger
 
 env:
-    AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-    AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    AWS_REGION: us-east-1
-    TF_STATE_BUCKET: ${{ secrets.AWS_TF_STATE_BUCKET }}
-    PRIVATE_SSH_KEY: ${{ secrets.AWS_PRIVATE_SSH_KEY }}
-    PUBLIC_SSH_KEY: ${{ secrets.AWS_PUBLIC_SSH_KEY }}
+  AWS_REGION: us-east-1
+  TF_STATE_BUCKET: ${{ secrets.AWS_TF_STATE_BUCKET }}
+  # keep SSH keys and AWS creds in secrets; reference them in steps below
 
 jobs:
-    deploy_infra:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v2
+  deploy_infra:
+    runs-on: ubuntu-latest
 
-            - name: Setup Terraform
-              uses: hashicorp/setup-terraform@v1
-              with:
-                  terraform_output: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-            - name: Configure AWS Credentials
-              uses: aws-actions/configure-aws-credentials@v1
-              with:
-                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-                  aws-region: us-east-1
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-            - name: Terraform Init
-              id: init
-              run: terraform init -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" -backend-config="region=${{ env.AWS_REGION }}" 
-              working-directory: ./terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.7"   # set your required version
 
-            - name: Terraform Plan
-              id: plan 
-              run: |-
-                terraform plan \
-                - var="region=${{ env.AWS_REGION }}" \
-                - var="public_key=${{ env.PUBLIC_SSH_KEY }}" \
-                - var="private_key=${{ env.PRIVATE_SSH_KEY }}" \
-                - var="key_name=deployer-key" \
-                - out=plan
-                working-directory: ./terraform
-              
+      - name: Terraform Init
+        id: init
+        working-directory: ./terraform
+        run: terraform init -input=false -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" -backend-config="region=${{ env.AWS_REGION }}"
 
-            - name: Terraform Apply
-              id: apply
-              run: terraform apply PLAN
-              working-directory: ./terraform
+      - name: Terraform Validate
+        working-directory: ./terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ./terraform
+        env:
+          PUBLIC_SSH_KEY: ${{ secrets.AWS_PUBLIC_SSH_KEY }}
+          PRIVATE_SSH_KEY: ${{ secrets.AWS_PRIVATE_SSH_KEY }}
+        run: |
+          terraform plan \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="public_key=${PUBLIC_SSH_KEY}" \
+            -var="private_key=${PRIVATE_SSH_KEY}" \
+            -var="key_name=deployer-key" \
+            -out=tfplan
+
+      - name: Upload tfplan (artifact)
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ./terraform/tfplan
+
+      - name: Terraform Apply (only on main branch or manual run)
+        if: github.ref == 'refs/heads/Complete-CICD-Terraform-aws' && github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        working-directory: ./terraform
+        env:
+          PUBLIC_SSH_KEY: ${{ secrets.AWS_PUBLIC_SSH_KEY }}
+          PRIVATE_SSH_KEY: ${{ secrets.AWS_PRIVATE_SSH_KEY }}
+        run: |
+          # Apply the previously created plan file (tfplan)
+          terraform apply -input=false -auto-approve tfplan
