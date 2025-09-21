@@ -8,8 +8,8 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  TF_STATE_BUCKET: ${{ secrets.AWS_TF_STATE_BUCKET }}
-  # keep SSH keys and AWS creds in secrets; reference them in steps below
+  TF_STATE_BUCKET: ${{ secrets.AWS_TF_STATE_BUCKET_NAME }}
+  # match repository secret names exactly
 
 jobs:
   deploy_infra:
@@ -23,7 +23,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_ACCESS_SECRET_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
@@ -44,8 +44,8 @@ jobs:
         id: plan
         working-directory: ./terraform
         env:
-          PUBLIC_SSH_KEY: ${{ secrets.AWS_PUBLIC_SSH_KEY }}
-          PRIVATE_SSH_KEY: ${{ secrets.AWS_PRIVATE_SSH_KEY }}
+          PUBLIC_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PUBLIC }}
+          PRIVATE_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PRIVATE }}
         run: |
           terraform plan \
             -var="region=${{ env.AWS_REGION }}" \
@@ -61,12 +61,12 @@ jobs:
           name: tfplan
           path: ./terraform/tfplan
 
-      - name: Terraform Apply (only on main branch or manual run)
+      - name: Terraform Apply (only on Complete-CICD-Terraform-aws branch or manual run)
         if: github.ref == 'refs/heads/Complete-CICD-Terraform-aws' && github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         working-directory: ./terraform
         env:
-          PUBLIC_SSH_KEY: ${{ secrets.AWS_PUBLIC_SSH_KEY }}
-          PRIVATE_SSH_KEY: ${{ secrets.AWS_PRIVATE_SSH_KEY }}
+          PUBLIC_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PUBLIC }}
+          PRIVATE_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PRIVATE }}
         run: |
           # Apply the previously created plan file (tfplan)
           terraform apply -input=false -auto-approve tfplan
